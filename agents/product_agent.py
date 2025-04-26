@@ -30,7 +30,7 @@ class ProductAgent:
         self.aws_secret_key = os.getenv("AWS_SECRET_KEY")
         self.amazon_client_id = os.getenv("AMAZON_CLIENT_ID")
         self.amazon_client_secret = os.getenv("AMAZON_CLIENT_SECRET")
-        self.amazon_access_token = os.getenv("AMAZON_ACCESS_TOKEN")
+        self.amazon_access_token = "Atza|IwEBIAMvZaIeOvxq8sRbeVbr45BLkhv6VxxAqK-pc20dhgJW4RGOTwC4TQyEAuAfX3rWBRqW_9OT_kNgxYexRfFt1irouAzVCJCZTuN-GegjD0afAOoX415hzJ2on6dtb-zrVr9ZIGVg0_QveuLF7fmEQL_AuHp8GzCr7gz5w4hnysBqkfvMgRPaWEliwjRKHj3F1cSKxZw3Ubc9md9rhyMD1OHUYFqY4keZ08Nuk1cAOM4dcwhtvFyT5_SolXdVCETAhaL0DpILMQOWDlTZfUkyuDIHQksWfwZcCPxSbdtGGOqs3mYxmaAsWtPY9gDES67TK6g2I8KYgPWHTNUkuWfuaMkYGjr4l8FxnlD22phLLUtJSw"
         
         # Rainforest API credentials
         self.rainforest_api_key = os.getenv("RAINFOREST_API_KEY")
@@ -551,6 +551,113 @@ class ProductAgent:
             print(f"Error getting product details: {e}")
             return None
             
+    def _get_product_reviews(self, asin):
+        """
+        Get product reviews from Rainforest API
+        
+        Args:
+            asin (str): The Amazon ASIN for the product
+            
+        Returns:
+            list: A list of review texts or empty list if no reviews found/error
+        """
+        try:
+            print(f"Getting reviews for ASIN: {asin}")
+            
+            # Build the request parameters
+            params = {
+                'api_key': self.rainforest_api_key,
+                'type': 'reviews',
+                'amazon_domain': 'amazon.com',
+                'asin': asin,
+                'filter_by_star': 'all_stars',
+                'sort_by': 'most_recent',
+                'language': 'en_US',
+                'review_formats': 'default_format',
+                'page': '1'
+            }
+            
+            # Make the request
+            response = requests.get('https://api.rainforestapi.com/request', params=params)
+            
+            if response.status_code == 200:
+                data = response.json()
+                
+                reviews = []
+                review_data = data.get('reviews', [])
+                
+                # Get up to 20 reviews to avoid excessive API usage
+                for review in review_data[:20]:
+                    title = review.get('title', '')
+                    body = review.get('body', '')
+                    rating = review.get('rating', 0)
+                    
+                    # Combine title and body for a complete review text
+                    review_text = f"{title}. {body}"
+                    # Add rating information
+                    review_info = {
+                        "text": review_text,
+                        "rating": rating
+                    }
+                    reviews.append(review_info)
+                
+                return reviews
+            else:
+                print(f"Error getting reviews from Rainforest: {response.text}")
+                return []
+            
+        except Exception as e:
+            print(f"Error getting product reviews: {e}")
+            return []
+    
+    def _analyze_reviews_for_issues(self, reviews):
+        """
+        Analyze product reviews to identify common complaints and improvement opportunities
+        
+        Args:
+            reviews (list): List of review dictionaries with 'text' and 'rating'
+            
+        Returns:
+            str: Summary of issues and suggested improvements
+        """
+        try:
+            if not reviews:
+                return ""
+            
+            # Prepare the reviews for analysis
+            reviews_text = ""
+            for i, review in enumerate(reviews, 1):
+                reviews_text += f"Review {i} (Rating: {review['rating']}/5): {review['text']}\n\n"
+            
+            prompt = f"""
+            Given the following product reviews, summarize the top customer complaints and suggest 3 improvements 
+            that could make the product better:
+            
+            {reviews_text}
+            
+            Keep your response to under 100 words total, focusing only on the most actionable insights.
+            Format your response in two sections:
+            1. Common Complaints: Briefly list key issues mentioned by customers
+            2. Suggested Improvements: List 3 specific ways to improve the product
+            """
+            
+            response = self.openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You analyze product reviews to identify improvements."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=150,
+                temperature=0.5
+            )
+            
+            analysis = response.choices[0].message.content.strip()
+            return analysis
+            
+        except Exception as e:
+            print(f"Error analyzing reviews: {e}")
+            return ""
+    
     def analyze_product(self, product):
         """
         Provide a detailed analysis of a product with passion product ideas
@@ -608,6 +715,15 @@ class ProductAgent:
         analysis += f"- **Rating:** {rating}/5 ({review_count} reviews)\n"
         analysis += f"- **Best Seller Rank:** {best_seller_rank}\n"
         analysis += f"- **Estimated Monthly Sales:** {sales_estimate} units\n\n"
+        
+        # Get and analyze customer reviews if ASIN is available
+        if asin:
+            reviews = self._get_product_reviews(asin)
+            if reviews:
+                review_analysis = self._analyze_reviews_for_issues(reviews)
+                if review_analysis:
+                    analysis += "## Customer Feedback Insights\n"
+                    analysis += review_analysis + "\n\n"
         
         # Determine viability level
         viability = "Low"
