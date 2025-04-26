@@ -549,4 +549,151 @@ class ProductAgent:
                 
         except Exception as e:
             print(f"Error getting product details: {e}")
-            return None 
+            return None
+            
+    def analyze_product(self, product):
+        """
+        Provide a detailed analysis of a product with passion product ideas
+        
+        Args:
+            product (dict): The product data to analyze
+            
+        Returns:
+            str: Detailed analysis with passion product ideas
+        """
+        if not product:
+            return "No product data available for analysis."
+            
+        # Extract basic product information
+        title = product.get('title', 'Unknown Product')
+        brand = product.get('brand', 'Unknown Brand')
+        category = product.get('category', 'Uncategorized')
+        asin = product.get('asin', '')
+        retail_price = product.get('price', 0)
+        wholesale_price = product.get('wholesale_price', 0)
+        profit_margin = product.get('profit_margin', 0)
+        rating = product.get('rating', 0)
+        review_count = product.get('review_count', 0)
+        best_seller_rank = product.get('best_seller_rank', 'N/A')
+        sales_estimate = product.get('sales_estimate', 0)
+        score = product.get('score', 0)
+        
+        # Build the analysis
+        analysis = f"# Product Analysis: {title}\n\n"
+        
+        # Basic information
+        analysis += "## Product Overview\n"
+        analysis += f"- **Title:** {title}\n"
+        analysis += f"- **Brand:** {brand}\n"
+        analysis += f"- **Category:** {category}\n"
+        analysis += f"- **ASIN:** {asin}\n"
+        analysis += f"- **Overall Score:** {score}/100\n\n"
+        
+        # Financial analysis
+        analysis += "## Financial Analysis\n"
+        analysis += f"- **Retail Price:** ${retail_price:.2f}\n"
+        analysis += f"- **Wholesale Price:** ${wholesale_price:.2f}\n"
+        analysis += f"- **Profit Margin:** {profit_margin:.2f}%\n"
+        
+        # Calculate profit per unit
+        profit_per_unit = retail_price - wholesale_price
+        analysis += f"- **Profit Per Unit:** ${profit_per_unit:.2f}\n"
+        
+        # Calculate monthly profit potential
+        monthly_profit = profit_per_unit * sales_estimate
+        analysis += f"- **Estimated Monthly Profit:** ${monthly_profit:.2f}\n\n"
+        
+        # Market analysis
+        analysis += "## Market Performance\n"
+        analysis += f"- **Rating:** {rating}/5 ({review_count} reviews)\n"
+        analysis += f"- **Best Seller Rank:** {best_seller_rank}\n"
+        analysis += f"- **Estimated Monthly Sales:** {sales_estimate} units\n\n"
+        
+        # Determine viability level
+        viability = "Low"
+        if score >= 70:
+            viability = "High"
+        elif score >= 40:
+            viability = "Medium"
+            
+        analysis += f"## Overall E-commerce Viability: {viability}\n\n"
+        
+        # Generate competition and risk assessment
+        if review_count == 0:
+            competition = "Unknown (No reviews)"
+            risk = "High - No proven track record"
+        elif review_count < 100:
+            competition = "Low to Medium"
+            risk = "Medium - Limited market validation"
+        elif review_count < 1000:
+            competition = "Medium"
+            risk = "Medium - Established product with competition"
+        else:
+            competition = "High"
+            risk = "Low - Well-established market"
+            
+        analysis += f"- **Competition Level:** {competition}\n"
+        analysis += f"- **Risk Level:** {risk}\n\n"
+        
+        # Generate passion product ideas
+        passion_ideas = self._generate_passion_product_ideas(title, category)
+        if passion_ideas:
+            analysis += "## Passion Product Ideas\n"
+            analysis += passion_ideas + "\n\n"
+        
+        # Final recommendation
+        analysis += "## Recommendation\n"
+        if score >= 70:
+            analysis += "- **Strong potential** for direct selling or creating passion products\n"
+            analysis += "- Consider starting with small inventory test orders\n"
+            analysis += "- High profit margin and proven sales history make this a promising opportunity\n"
+        elif score >= 40:
+            analysis += "- **Moderate potential** requires careful consideration\n"
+            analysis += "- Explore ways to differentiate or add value through passion products\n"
+            analysis += "- Test market with minimal investment before scaling\n"
+        else:
+            analysis += "- **Limited direct selling potential**\n"
+            analysis += "- Consider only if you have unique improvements or market positioning\n"
+            analysis += "- High risk relative to potential reward\n"
+        
+        return analysis
+    
+    def _generate_passion_product_ideas(self, title, category):
+        """
+        Generate passion product ideas using OpenAI
+        
+        Args:
+            title (str): Product title
+            category (str): Product category
+            
+        Returns:
+            str: Passion product ideas or empty string if generation fails
+        """
+        try:
+            prompt = f"""
+            Suggest 3 creative ways to improve or build upon this product for a new ecommerce business. 
+            Think in terms of Passion Products: solving complaints, enhancing features, or creating niche-focused upgrades.
+            
+            Product: {title}
+            Category: {category}
+            
+            Keep your answer under 100 words total.
+            Format as a numbered list with short, clear suggestions.
+            """
+            
+            response = self.openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You generate creative e-commerce product improvement ideas."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=150,
+                temperature=0.7
+            )
+            
+            ideas = response.choices[0].message.content.strip()
+            return ideas
+            
+        except Exception as e:
+            print(f"Error generating passion product ideas: {e}")
+            return "" 
