@@ -2,6 +2,7 @@ import os
 from openai import OpenAI
 from dotenv import load_dotenv
 from agents.product_agent import ProductAgent
+from database.conversation_store import ConversationStore
 
 # Load environment variables
 load_dotenv()
@@ -20,6 +21,9 @@ class LeadAgent:
         # Initialize specialized agents
         self.product_agent = ProductAgent()
         
+        # Initialize database
+        self.conversation_store = ConversationStore()
+        
         # Cache for products to enable analysis of previously seen products
         self.product_cache = {}
         
@@ -33,6 +37,8 @@ class LeadAgent:
         Returns:
             str: The agent's response
         """
+        print(f"Processing query: {query}")
+        
         # Check for product analysis request first
         analysis_intent, product_index = self._check_for_analysis_intent(query)
         if analysis_intent and product_index is not None:
@@ -49,6 +55,11 @@ class LeadAgent:
             products = self.product_agent.get_product_recommendations(query, num_results=5)
             # Cache products for later analysis
             self.product_cache = {i+1: product for i, product in enumerate(products)}
+            
+            # Save products to the database
+            for product in products:
+                self.conversation_store.save_product(product)
+                
             return self._format_product_recommendations(query, products)
         elif intent == "product_info":
             # Extract product identifier if present
@@ -56,11 +67,21 @@ class LeadAgent:
             if asin:
                 product = self.product_agent.get_product_details(asin)
                 if product:
-                    return self._format_product_info(product)
+                    # Save the product to the database
+                    self.conversation_store.save_product(product)
+                    
+                    if "analyze" in query.lower():
+                        return self._analyze_product_for_ecommerce(product)
+                    else:
+                        return self._format_product_info(product)
             
             # If no specific ASIN or product not found, get a recommendation
             products = self.product_agent.get_product_recommendations(query, num_results=1)
             if products:
+                # Save products to the database
+                for product in products:
+                    self.conversation_store.save_product(product)
+                    
                 return self._format_product_info(products[0])
             else:
                 return "I couldn't find information about that product. Could you provide more details?"

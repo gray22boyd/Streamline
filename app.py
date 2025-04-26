@@ -73,6 +73,7 @@ with st.sidebar:
     st.markdown("### Navigation")
     st.markdown("- [Home](.) (current page)")
     st.markdown("- [Conversation History](/History)")
+    st.markdown("- [Products Database](/Products)")
     
     # Add settings and controls
     st.markdown("### Settings")
@@ -87,8 +88,8 @@ with st.sidebar:
         "What headphones do you recommend?",
         "I need a water bottle that keeps drinks cold",
         "Do you have any t-shirts?",
-        "What's your return policy?",
-        "Tell me about your fitness watches"
+        "What are trending beauty products?",
+        "Find me bathroom products"
     ]
     
     for query in example_queries:
