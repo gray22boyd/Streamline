@@ -134,9 +134,89 @@ class ProductAgent:
             print(f"Error extracting search info: {e}")
             return {'search_terms': query, 'category': None}
     
+    def _sign_request(self, method, uri, query_string='', payload=''):
+        """
+        Sign a request with AWS Signature Version 4
+        
+        Args:
+            method (str): HTTP method (GET, POST, etc.)
+            uri (str): Request URI
+            query_string (str): Query string
+            payload (str): Request payload
+            
+        Returns:
+            tuple: (url, headers) The signed URL and headers for the request
+        """
+        # Step 1: Create request date and unique request credentials
+        now = datetime.utcnow()
+        amz_date = now.strftime('%Y%m%dT%H%M%SZ')
+        date_stamp = now.strftime('%Y%m%d')
+        
+        # Set up the canonical URI, host, and endpoint
+        host = 'sellingpartnerapi-na.amazon.com'
+        canonical_uri = uri
+        endpoint = f'https://{host}'
+        
+        # Create canonical headers
+        canonical_headers = (
+            f'host:{host}\n'
+            f'x-amz-date:{amz_date}\n'
+        )
+        
+        # Create signed headers
+        signed_headers = 'host;x-amz-date'
+        
+        # Step 2: Create canonical request
+        if method == 'GET' and query_string:
+            canonical_request = f"{method}\n{canonical_uri}\n{query_string}\n{canonical_headers}\n{signed_headers}\n{hashlib.sha256(b'').hexdigest()}"
+        else:
+            canonical_request = f"{method}\n{canonical_uri}\n\n{canonical_headers}\n{signed_headers}\n{hashlib.sha256(payload.encode('utf-8')).hexdigest()}"
+        
+        # Step 3: Create string to sign
+        algorithm = 'AWS4-HMAC-SHA256'
+        credential_scope = f"{date_stamp}/us-east-1/execute-api/aws4_request"
+        string_to_sign = f"{algorithm}\n{amz_date}\n{credential_scope}\n{hashlib.sha256(canonical_request.encode('utf-8')).hexdigest()}"
+        
+        # Step 4: Calculate signature
+        # Create signing key
+        def sign(key, msg):
+            return hmac.new(key, msg.encode('utf-8'), hashlib.sha256).digest()
+        
+        signing_key = sign(('AWS4' + self.aws_secret_key).encode('utf-8'), date_stamp)
+        signing_key = sign(signing_key, 'us-east-1')
+        signing_key = sign(signing_key, 'execute-api')
+        signing_key = sign(signing_key, 'aws4_request')
+        
+        # Calculate signature
+        signature = hmac.new(signing_key, string_to_sign.encode('utf-8'), hashlib.sha256).hexdigest()
+        
+        # Step 5: Create authorization header
+        auth_header = (
+            f"{algorithm} "
+            f"Credential={self.aws_access_key}/{credential_scope}, "
+            f"SignedHeaders={signed_headers}, "
+            f"Signature={signature}"
+        )
+        
+        # Create request URL and headers
+        if query_string:
+            url = f"{endpoint}{canonical_uri}?{query_string}"
+        else:
+            url = f"{endpoint}{canonical_uri}"
+        
+        # Create headers
+        headers = {
+            'x-amz-date': amz_date,
+            'Authorization': auth_header,
+            'x-amz-access-token': self.amazon_access_token,
+            'Content-Type': 'application/json'
+        }
+        
+        return url, headers
+    
     def _search_amazon_products(self, search_terms, category=None, limit=5):
         """
-        Search for products using Amazon SP API
+        Search for products using Amazon SP API with manual AWS Signature Version 4
         
         Args:
             search_terms (str): Search terms to find products
@@ -149,90 +229,88 @@ class ProductAgent:
         try:
             print(f"Searching Amazon for: {search_terms} in category: {category}")
             
-            # Use Amazon Product Advertising API for product search
-            # This is different from SP API but more suitable for product search
-            # Build the request
+            # Build the request URI and parameters
+            uri = '/catalog/2022-04-01/items'
             
-            # For SP API, we'd need to use the right endpoint
-            # For demonstration, we'll use the Catalog Items API
-            
-            # First, check if we need to refresh the access token
-            # In production code, you would track token expiration and refresh
-            
-            # Create SP API client using boto3
-            sp_api_client = self.session.client(
-                service_name='execute-api',
-                region_name='us-east-1',
-                endpoint_url='https://sellingpartnerapi-na.amazon.com'
-            )
-            
-            # Prepare request parameters
-            # Convert search terms to keywords format
-            keywords = search_terms.replace(' ', '+')
-            
-            # Create the request URL
-            # Note: This is a simplified version, actual implementation might vary
-            path = f"/catalog/2020-12-01/items"
+            # Prepare query parameters
             query_params = {
-                'keywords': keywords,
+                'keywords': search_terms,
                 'marketplaceIds': 'ATVPDKIKX0DER',  # US marketplace
-                'includedData': 'summaries,images,productTypes,salesRanks,attributes',
-                'pageSize': limit
+                'includedData': 'summaries,images,attributes,dimensions,identifiers,productTypes,relationships,salesRanks',
+                'pageSize': str(limit)
             }
             
             if category:
                 query_params['productType'] = category
                 
+            # Create query string
             query_string = urlencode(query_params)
-            url = f"{path}?{query_string}"
             
-            # Sign the request with AWS Signature v4
-            # This is a simplified version; in production,
-            # you'd use a proper signing function or library
+            # Sign the request using AWS Signature Version 4
+            url, headers = self._sign_request('GET', uri, query_string)
             
-            # Make the request with SP API client
-            response = sp_api_client.get(
-                restApiId='sellingpartnerapi-na',
-                path=url,
-                headers={
-                    'x-amz-access-token': self.amazon_access_token
-                }
-            )
+            # Make the request
+            response = requests.get(url, headers=headers)
             
             # Process the response
-            if response.get('statusCode') == 200:
-                data = json.loads(response.get('body', '{}'))
+            if response.status_code == 200:
+                data = response.json()
                 items = data.get('items', [])
                 
                 # Format the response
                 products = []
                 for item in items:
-                    summary = item.get('summaries', [{}])[0]
+                    # Extract product details
+                    asin = item.get('asin', '')
+                    
+                    # Get summary information
+                    summary = {}
+                    if 'summaries' in item and len(item['summaries']) > 0:
+                        summary = item['summaries'][0]
+                    
+                    title = summary.get('title', '')
+                    brand = summary.get('brandName', '')
+                    
+                    # Get product type/category
+                    category = ''
+                    if 'productTypes' in item and len(item['productTypes']) > 0:
+                        category = item['productTypes'][0].get('name', '')
+                    
+                    # Get image URL
                     image_url = ''
                     if 'images' in item and len(item['images']) > 0:
-                        image_url = item['images'][0].get('link', '')
+                        primary_images = [img for img in item['images'] if img.get('variant') == 'MAIN']
+                        if primary_images:
+                            image_url = primary_images[0].get('link', '')
+                        else:
+                            image_url = item['images'][0].get('link', '')
                     
                     # Get price from attributes if available
                     price = 0
                     if 'attributes' in item:
                         for attr in item['attributes']:
                             if attr.get('name') == 'ListPrice':
-                                price = float(attr.get('value', '0'))
+                                price_str = attr.get('value', '0')
+                                try:
+                                    price = float(price_str)
+                                except ValueError:
+                                    price = 0
                                 break
                     
+                    # Create the product dictionary
                     product = {
-                        "asin": item.get('asin', ''),
-                        "title": summary.get('itemName', ''),
-                        "brand": summary.get('brand', ''),
+                        "asin": asin,
+                        "title": title,
+                        "brand": brand,
                         "price": price,
-                        "category": summary.get('productType', ''),
+                        "category": category,
                         "image_url": image_url
                     }
                     products.append(product)
                 
                 return products
             else:
-                print(f"Error from Amazon SP API: {response}")
+                print(f"Error from Amazon SP API: {response.status_code} - {response.text}")
                 # Fallback to Rainforest API for search
                 return self._search_rainforest_products(search_terms, category, limit)
             
