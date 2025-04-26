@@ -58,14 +58,21 @@ class ProductAgent:
         # Step 1: Extract search terms and category from the query
         search_info = self._extract_search_info(query)
         
+        # Step 1.5: Parse filters from the query
+        filters = self.parse_query_filters(query)
+        
+        # If category is provided explicitly, it overrides the one in search_info
         if category:
             search_info['category'] = category
-            
+        # If category was found in filters but not in search_info, use it
+        elif filters['category'] and not search_info['category']:
+            search_info['category'] = filters['category']
+        
         # Step 2: Search for products using Amazon SP API
         amazon_products = self._search_amazon_products(
             search_terms=search_info['search_terms'],
             category=search_info['category'],
-            limit=num_results
+            limit=max(num_results * 3, 15)  # Request more products to allow for filtering
         )
         
         if not amazon_products:
@@ -85,10 +92,13 @@ class ProductAgent:
                     combined_product['score'] = self._calculate_product_score(combined_product)
                     enriched_products.append(combined_product)
         
-        # Step 4: Sort products by score (descending)
-        enriched_products.sort(key=lambda x: x.get('score', 0), reverse=True)
+        # Step 4: Apply filters from user query
+        filtered_products = self._apply_filters(enriched_products, filters)
         
-        return enriched_products[:num_results]
+        # Step 5: Sort filtered products by score (descending)
+        filtered_products.sort(key=lambda x: x.get('score', 0), reverse=True)
+        
+        return filtered_products[:num_results]
     
     def _extract_search_info(self, query):
         """
@@ -321,7 +331,7 @@ class ProductAgent:
     
     def _search_rainforest_products(self, search_terms, category=None, limit=5):
         """
-        Search for products using Rainforest API as a fallback
+        Search for products using Rainforest API
         
         Args:
             search_terms (str): Search terms to find products
@@ -340,13 +350,13 @@ class ProductAgent:
                 'type': 'search',
                 'amazon_domain': 'amazon.com',
                 'search_term': search_terms,
-                'sort_by': 'featured'
+                'include_html': 'false',
+                'output': 'json'
             }
             
             if category:
-                # Convert category to Amazon department format if possible
-                params['search_filter'] = f"department:{category}"
-            
+                params['category_id'] = category
+                
             # Make the request
             response = requests.get('https://api.rainforestapi.com/request', params=params)
             
@@ -354,15 +364,55 @@ class ProductAgent:
                 data = response.json()
                 search_results = data.get('search_results', [])
                 
+                # Calculate sponsored ads pressure (analyze up to 20 results)
+                results_to_analyze = search_results[:20] if len(search_results) > 20 else search_results
+                sponsored_count = sum(1 for item in results_to_analyze if item.get('sponsored', False))
+                total_count = len(results_to_analyze)
+                sponsored_ratio = sponsored_count / total_count if total_count > 0 else 0
+                
+                # Determine ad pressure level
+                if sponsored_ratio < 0.2:
+                    ad_pressure_level = "Low"
+                elif sponsored_ratio <= 0.5:
+                    ad_pressure_level = "Medium"
+                else:
+                    ad_pressure_level = "High"
+                
+                print(f"Sponsored Ads Analysis: {sponsored_count}/{total_count} sponsored results ({sponsored_ratio:.1%}) - {ad_pressure_level} Ad Pressure")
+                
                 products = []
                 for item in search_results:
+                    # Extract brand information properly
+                    brand_info = item.get('brand', {})
+                    brand_name = ''
+                    
+                    # Handle different brand formats in the response
+                    if isinstance(brand_info, dict):
+                        brand_name = brand_info.get('name', '')
+                    elif isinstance(brand_info, str):
+                        brand_name = brand_info
+                        
+                    # Extract price information
+                    price_info = item.get('price', {})
+                    price_value = 0
+                    
+                    if isinstance(price_info, dict):
+                        price_value = float(price_info.get('value', 0))
+                    
+                    # Check if this product is sponsored
+                    is_sponsored = item.get('sponsored', False)
+                    
+                    # Create product dictionary with all necessary fields
                     product = {
                         "asin": item.get('asin', ''),
                         "title": item.get('title', ''),
-                        "brand": item.get('brand', {}).get('name', ''),
-                        "price": float(item.get('price', {}).get('value', 0)),
+                        "brand": brand_name,
+                        "price": price_value,
                         "category": item.get('categories', [{}])[0].get('name', '') if item.get('categories') else '',
-                        "image_url": item.get('image', '')
+                        "image_url": item.get('image', ''),
+                        "is_sponsored": is_sponsored,
+                        "ad_pressure_level": ad_pressure_level,
+                        "sponsored_ratio": sponsored_ratio
                     }
                     products.append(product)
                 
@@ -394,7 +444,7 @@ class ProductAgent:
                 'type': 'product',
                 'amazon_domain': 'amazon.com',
                 'asin': asin,
-                'include_data': 'ratings,pricing,bestsellers_rank'
+                'include_data': 'ratings,pricing,bestsellers_rank,brand,offers,buybox_winner,also_bought,sponsored_products'
             }
             
             # Make the request
@@ -409,12 +459,98 @@ class ProductAgent:
                 review_count = product.get('ratings_total', 0)
                 retail_price = float(product.get('buybox_winner', {}).get('price', {}).get('value', 0))
                 
-                # Get best seller rank
-                best_seller_rank = 999
+                # Get brand information
+                # Sometimes brand is a string and sometimes it's a dict with a name field
+                brand = product.get('brand', '')
+                if isinstance(brand, dict):
+                    brand = brand.get('name', '')
+                
+                # Get best seller ranks - both overall and category-specific
+                best_seller_rank = 999999
+                category_ranks = []
                 bestseller_ranks = product.get('bestsellers_rank', [])
+                
                 if bestseller_ranks and len(bestseller_ranks) > 0:
-                    # Use the first/primary rank
-                    best_seller_rank = bestseller_ranks[0].get('rank', 999)
+                    # Parse all category ranks
+                    for rank_entry in bestseller_ranks:
+                        rank = rank_entry.get('rank', 999999)
+                        category = rank_entry.get('category', 'Unknown Category')
+                        
+                        # Store each category with its rank
+                        category_ranks.append({
+                            'rank': rank,
+                            'category': category
+                        })
+                        
+                        # Use the best (lowest) rank as the overall rank
+                        if rank < best_seller_rank:
+                            best_seller_rank = rank
+                
+                # Extract seller information for competition analysis
+                offers = product.get('offers', [])
+                marketplace_sellers = []
+                
+                # Extract marketplace sellers from offers data
+                if isinstance(offers, list) and len(offers) > 0:
+                    for offer in offers:
+                        seller = offer.get('merchant', {})
+                        if isinstance(seller, dict):
+                            seller_name = seller.get('name', 'Unknown Seller')
+                            if seller_name not in marketplace_sellers:
+                                marketplace_sellers.append(seller_name)
+                
+                # Get buybox winner information
+                buybox_winner = product.get('buybox_winner', {})
+                
+                # Determine competition level based on sellers and reviews
+                competition_level, competition_details = self.determine_competition_level({
+                    'review_count': review_count,
+                    'offers': offers,
+                    'marketplace_sellers': marketplace_sellers,
+                    'buybox_winner': buybox_winner
+                })
+                
+                # Analyze sponsored ad pressure
+                ad_pressure_score = 0
+                ad_pressure_details = []
+                
+                # Check if this product is sponsored itself
+                is_product_sponsored = product.get('sponsored', False)
+                if is_product_sponsored:
+                    ad_pressure_score += 1
+                    ad_pressure_details.append("Product listing is sponsored")
+                
+                # Count related sponsored products
+                sponsored_products = product.get('sponsored_products', [])
+                sponsored_count = len(sponsored_products)
+                if sponsored_count > 5:
+                    ad_pressure_score += 1
+                    ad_pressure_details.append(f"Page shows {sponsored_count} sponsored products")
+                
+                # Get ad pressure level from search results if available
+                ad_pressure_level = product.get('ad_pressure_level', None)
+                sponsored_ratio = product.get('sponsored_ratio', None)
+                
+                # If we're looking at a product detail that wasn't from our search results
+                # Use the sponsored products to estimate ad pressure
+                if ad_pressure_level is None:
+                    # Look at competitors who might be sponsoring ads
+                    if sponsored_count == 0:
+                        ad_pressure_level = "Low"
+                    elif sponsored_count <= 5:
+                        ad_pressure_level = "Medium"
+                    else:
+                        ad_pressure_level = "High"
+                    
+                # Modify ad pressure level based on additional signals
+                if ad_pressure_score >= 2:
+                    ad_pressure_level = "High"
+                elif ad_pressure_score == 1 and ad_pressure_level != "High":
+                    # Bump up one level
+                    if ad_pressure_level == "Low":
+                        ad_pressure_level = "Medium"
+                    elif ad_pressure_level == "Medium":
+                        ad_pressure_level = "High"
                 
                 # Estimate wholesale price (typically 50-60% of retail)
                 # This is an estimation - in reality, you'd need supplier data
@@ -426,31 +562,27 @@ class ProductAgent:
                 else:
                     profit_margin = 0
                 
-                # Estimate monthly sales based on BSR
-                # This is a very rough estimation algorithm
-                # In reality, you'd need a more sophisticated model
-                if best_seller_rank < 100:
-                    sales_estimate = 10000 + (100 - best_seller_rank) * 200
-                elif best_seller_rank < 1000:
-                    sales_estimate = 3000 + (1000 - best_seller_rank) * 7
-                elif best_seller_rank < 10000:
-                    sales_estimate = 500 + (10000 - best_seller_rank) * 0.25
-                else:
-                    sales_estimate = max(100, 500 - (best_seller_rank - 10000) * 0.05)
-                
-                sales_estimate = int(sales_estimate)
-                
                 # Get the Amazon URL
                 amazon_link = f"https://www.amazon.com/dp/{asin}"
                 
                 return {
+                    "brand": brand,
                     "wholesale_price": wholesale_price,
                     "amazon_link": amazon_link,
                     "rating": rating,
                     "review_count": review_count,
                     "best_seller_rank": best_seller_rank,
-                    "sales_estimate": sales_estimate,
-                    "profit_margin": round(profit_margin, 2)
+                    "category_ranks": category_ranks,
+                    "profit_margin": round(profit_margin, 2),
+                    "marketplace_sellers": marketplace_sellers,
+                    "seller_count": len(marketplace_sellers),
+                    "competition_level": competition_level,
+                    "competition_details": competition_details,
+                    "is_sponsored": is_product_sponsored,
+                    "sponsored_count": sponsored_count,
+                    "ad_pressure_level": ad_pressure_level,
+                    "ad_pressure_details": ad_pressure_details,
+                    "ad_pressure_score": ad_pressure_score
                 }
             else:
                 print(f"Error from Rainforest API: {response.text}")
@@ -475,8 +607,8 @@ class ProductAgent:
             'rating': 0.25,          # Product rating (0-5)
             'review_count': 0.15,    # Number of reviews
             'rank': 0.20,            # Best seller rank (inverse)
-            'profit_margin': 0.30,   # Profit margin
-            'sales': 0.10            # Sales estimate
+            'profit_margin': 0.25,   # Profit margin
+            'ad_pressure': 0.15      # Ad pressure (inverse)
         }
         
         # Get values (with defaults if missing)
@@ -485,7 +617,16 @@ class ProductAgent:
         best_seller_rank = product.get('best_seller_rank', 1000)
         rank_score = 1 - min(best_seller_rank / 100, 1)  # Normalize and invert
         profit_margin = min(product.get('profit_margin', 0) / 100, 1)  # Normalize to 0-1
-        sales = min(product.get('sales_estimate', 0) / 20000, 1)  # Normalize to 0-1
+        
+        # Calculate ad pressure score (inverse - lower ad pressure is better)
+        ad_pressure_level = product.get('ad_pressure_level', 'Medium')
+        ad_pressure_score = 0
+        if ad_pressure_level == "Low":
+            ad_pressure_score = 1.0  # Best score
+        elif ad_pressure_level == "Medium":
+            ad_pressure_score = 0.5  # Medium score
+        else:  # High
+            ad_pressure_score = 0.1  # Worst score
         
         # Calculate weighted score
         score = (
@@ -493,7 +634,7 @@ class ProductAgent:
             weights['review_count'] * review_count +
             weights['rank'] * rank_score +
             weights['profit_margin'] * profit_margin +
-            weights['sales'] * sales
+            weights['ad_pressure'] * ad_pressure_score
         )
         
         return round(score * 100, 2)  # Return as 0-100 score
@@ -515,7 +656,8 @@ class ProductAgent:
                 'api_key': self.rainforest_api_key,
                 'type': 'product',
                 'amazon_domain': 'amazon.com',
-                'asin': asin
+                'asin': asin,
+                'include_data': 'ratings,pricing,bestsellers_rank,brand,categories,offers,buybox_winner,sponsored_products'
             }
             
             response = requests.get('https://api.rainforestapi.com/request', params=params)
@@ -524,14 +666,69 @@ class ProductAgent:
                 data = response.json()
                 rf_product = data.get('product', {})
                 
+                # Extract brand information correctly
+                brand_info = rf_product.get('brand', '')
+                brand_name = ''
+                
+                # Handle different brand formats
+                if isinstance(brand_info, dict):
+                    brand_name = brand_info.get('name', '')
+                elif isinstance(brand_info, str):
+                    brand_name = brand_info
+                
+                # Extract price information
+                retail_price = 0
+                buybox = rf_product.get('buybox_winner', {})
+                
+                if isinstance(buybox, dict):
+                    price_info = buybox.get('price', {})
+                    if isinstance(price_info, dict):
+                        retail_price = float(price_info.get('value', 0))
+                
+                # Extract category information
+                category = 'Uncategorized'
+                categories = rf_product.get('categories', [])
+                if categories and len(categories) > 0:
+                    category = categories[0].get('name', 'Uncategorized')
+                
+                # Extract image URL
+                image_url = ''
+                main_image = rf_product.get('main_image', {})
+                if isinstance(main_image, dict):
+                    image_url = main_image.get('link', '')
+                
+                # Extract seller information for competition analysis
+                offers = rf_product.get('offers', [])
+                marketplace_sellers = []
+                
+                # Extract marketplace sellers from offers data
+                if isinstance(offers, list) and len(offers) > 0:
+                    for offer in offers:
+                        seller = offer.get('merchant', {})
+                        if isinstance(seller, dict):
+                            seller_name = seller.get('name', 'Unknown Seller')
+                            if seller_name not in marketplace_sellers:
+                                marketplace_sellers.append(seller_name)
+                
+                # Check if product is sponsored
+                is_sponsored = rf_product.get('sponsored', False)
+                
+                # Count related sponsored products
+                sponsored_products = rf_product.get('sponsored_products', [])
+                sponsored_count = len(sponsored_products) if sponsored_products else 0
+                
                 # Extract basic product data
                 product = {
                     "asin": asin,
                     "title": rf_product.get('title', ''),
-                    "brand": rf_product.get('brand', ''),
-                    "price": float(rf_product.get('buybox_winner', {}).get('price', {}).get('value', 0)),
-                    "category": rf_product.get('categories', [{}])[0].get('name', '') if rf_product.get('categories') else '',
-                    "image_url": rf_product.get('main_image', {}).get('link', '')
+                    "brand": brand_name,
+                    "price": retail_price,
+                    "category": category,
+                    "image_url": image_url,
+                    "marketplace_sellers": marketplace_sellers,
+                    "seller_count": len(marketplace_sellers),
+                    "is_sponsored": is_sponsored,
+                    "sponsored_count": sponsored_count
                 }
                 
                 # Get additional data from Rainforest
@@ -682,8 +879,22 @@ class ProductAgent:
         rating = product.get('rating', 0)
         review_count = product.get('review_count', 0)
         best_seller_rank = product.get('best_seller_rank', 'N/A')
-        sales_estimate = product.get('sales_estimate', 0)
         score = product.get('score', 0)
+        
+        # Get competition and seller information
+        competition_level = product.get('competition_level', 'Unknown')
+        competition_details = product.get('competition_details', '')
+        seller_count = product.get('seller_count', 0)
+        marketplace_sellers = product.get('marketplace_sellers', [])
+        
+        # Get sponsored ads and ad pressure information
+        ad_pressure_level = product.get('ad_pressure_level', 'Unknown')
+        ad_pressure_details = product.get('ad_pressure_details', [])
+        is_sponsored = product.get('is_sponsored', False)
+        sponsored_count = product.get('sponsored_count', 0)
+        
+        # Get category-specific rankings
+        category_ranks = product.get('category_ranks', [])
         
         # Build the analysis
         analysis = f"# Product Analysis: {title}\n\n"
@@ -704,17 +915,75 @@ class ProductAgent:
         
         # Calculate profit per unit
         profit_per_unit = retail_price - wholesale_price
-        analysis += f"- **Profit Per Unit:** ${profit_per_unit:.2f}\n"
+        analysis += f"- **Profit Per Unit:** ${profit_per_unit:.2f}\n\n"
         
-        # Calculate monthly profit potential
-        monthly_profit = profit_per_unit * sales_estimate
-        analysis += f"- **Estimated Monthly Profit:** ${monthly_profit:.2f}\n\n"
+        # Create profitability projection grid
+        analysis += "## Profitability Projection Table\n\n"
+        
+        # Define unit sales scenarios
+        units_scenarios = [10, 25, 50, 100, 250, 500]
+        
+        # Create the table header
+        analysis += "| Units Sold per Month | Monthly Profit |\n"
+        analysis += "|----------------------|----------------|\n"
+        
+        # Add rows for each scenario
+        for units in units_scenarios:
+            monthly_profit = units * profit_per_unit
+            analysis += f"| {units} units | ${monthly_profit:.2f} |\n"
+        
+        # Add disclaimer note
+        analysis += "\n*These are hypothetical projections based on manual unit sales assumptions. Actual results depend on real market demand and competition.*\n\n"
         
         # Market analysis
         analysis += "## Market Performance\n"
         analysis += f"- **Rating:** {rating}/5 ({review_count} reviews)\n"
         analysis += f"- **Best Seller Rank:** {best_seller_rank}\n"
-        analysis += f"- **Estimated Monthly Sales:** {sales_estimate} units\n\n"
+        
+        # Add category-specific rankings if available
+        if category_ranks and len(category_ranks) > 0:
+            analysis += "- **Category Rankings:**\n"
+            for i, rank_info in enumerate(category_ranks, 1):
+                category_name = rank_info.get('category', 'Unknown Category')
+                category_rank = rank_info.get('rank', 'N/A')
+                analysis += f"  - **{category_name}:** #{category_rank}\n"
+        
+        # Add competition analysis
+        analysis += "\n## Competition Analysis\n"
+        analysis += f"- **Competition Level:** {competition_level}\n"
+        if competition_details:
+            analysis += f"- **Competition Details:** {competition_details}\n"
+        
+        # Add seller information if available
+        if seller_count > 0:
+            analysis += f"- **Number of Sellers:** {seller_count}\n"
+            
+            # List major sellers (up to 5)
+            if marketplace_sellers and len(marketplace_sellers) > 0:
+                top_sellers = marketplace_sellers[:5]
+                seller_list = ", ".join(top_sellers)
+                
+                if len(marketplace_sellers) > 5:
+                    seller_list += f" and {len(marketplace_sellers) - 5} more"
+                    
+                analysis += f"- **Major Sellers:** {seller_list}\n"
+        
+        # Add sponsored ads pressure analysis
+        analysis += "\n## Sponsored Ads Pressure\n"
+        analysis += f"- **Ad Pressure Level:** {ad_pressure_level}\n"
+        
+        # Add warning for high ad pressure
+        if ad_pressure_level == "High":
+            analysis += "\n⚠️ **High ad saturation detected. Launching in this market may require significant advertising spend to compete.**\n"
+        
+        # Add details about sponsored ads if available
+        if is_sponsored:
+            analysis += "- This product listing is sponsored\n"
+        if sponsored_count > 0:
+            analysis += f"- Found {sponsored_count} sponsored product ads related to this item\n"
+        if ad_pressure_details and len(ad_pressure_details) > 0:
+            for detail in ad_pressure_details:
+                analysis += f"- {detail}\n"
         
         # Get and analyze customer reviews if ASIN is available
         if asin:
@@ -722,34 +991,36 @@ class ProductAgent:
             if reviews:
                 review_analysis = self._analyze_reviews_for_issues(reviews)
                 if review_analysis:
-                    analysis += "## Customer Feedback Insights\n"
+                    analysis += "\n## Customer Feedback Insights\n"
                     analysis += review_analysis + "\n\n"
         
-        # Determine viability level
+        # Determine viability level based on score and competition
         viability = "Low"
-        if score >= 70:
+        if score >= 70 and competition_level in ["Low", "Medium"]:
             viability = "High"
-        elif score >= 40:
+        elif (score >= 70 and competition_level == "High") or (score >= 40 and competition_level in ["Low", "Medium"]):
             viability = "Medium"
             
-        analysis += f"## Overall E-commerce Viability: {viability}\n\n"
+        analysis += f"\n## Overall E-commerce Viability: {viability}\n\n"
         
-        # Generate competition and risk assessment
-        if review_count == 0:
-            competition = "Unknown (No reviews)"
-            risk = "High - No proven track record"
-        elif review_count < 100:
-            competition = "Low to Medium"
-            risk = "Medium - Limited market validation"
-        elif review_count < 1000:
-            competition = "Medium"
-            risk = "Medium - Established product with competition"
-        else:
-            competition = "High"
-            risk = "Low - Well-established market"
+        # Generate risk assessment based on competition and reviews
+        risk_level = "Unknown"
+        risk_details = ""
+        
+        if competition_level == "High" and review_count >= 1000:
+            risk_level = "High"
+            risk_details = "Saturated market with established players"
+        elif competition_level == "Medium" or (competition_level == "High" and review_count < 1000):
+            risk_level = "Medium"
+            risk_details = "Competitive market with room for differentiation"
+        elif competition_level == "Low" and review_count > 0:
+            risk_level = "Low"
+            risk_details = "Relatively open market with limited competition"
+        elif review_count == 0:
+            risk_level = "High"
+            risk_details = "Unproven market without review validation"
             
-        analysis += f"- **Competition Level:** {competition}\n"
-        analysis += f"- **Risk Level:** {risk}\n\n"
+        analysis += f"- **Risk Level:** {risk_level} - {risk_details}\n\n"
         
         # Generate passion product ideas
         passion_ideas = self._generate_passion_product_ideas(title, category)
@@ -759,11 +1030,11 @@ class ProductAgent:
         
         # Final recommendation
         analysis += "## Recommendation\n"
-        if score >= 70:
+        if score >= 70 and competition_level in ["Low", "Medium"]:
             analysis += "- **Strong potential** for direct selling or creating passion products\n"
             analysis += "- Consider starting with small inventory test orders\n"
             analysis += "- High profit margin and proven sales history make this a promising opportunity\n"
-        elif score >= 40:
+        elif score >= 40 or competition_level == "Low":
             analysis += "- **Moderate potential** requires careful consideration\n"
             analysis += "- Explore ways to differentiate or add value through passion products\n"
             analysis += "- Test market with minimal investment before scaling\n"
@@ -771,6 +1042,10 @@ class ProductAgent:
             analysis += "- **Limited direct selling potential**\n"
             analysis += "- Consider only if you have unique improvements or market positioning\n"
             analysis += "- High risk relative to potential reward\n"
+        
+        # Add additional recommendation based on ad pressure
+        if ad_pressure_level == "High":
+            analysis += "- **Consider advertising costs** in your business model as this market has high ad saturation\n"
         
         return analysis
     
@@ -812,4 +1087,221 @@ class ProductAgent:
             
         except Exception as e:
             print(f"Error generating passion product ideas: {e}")
-            return "" 
+            return ""
+    
+    def parse_query_filters(self, query):
+        """
+        Extract filtering criteria from the user's natural language query
+        
+        Args:
+            query (str): The user's search query
+            
+        Returns:
+            dict: Dictionary with filter criteria
+        """
+        try:
+            print(f"Parsing filters from query: {query}")
+            
+            # Initialize default filter values
+            filters = {
+                'min_margin': None,
+                'max_price': None,
+                'min_rating': None,
+                'max_reviews': None,
+                'category': None
+            }
+            
+            # Use OpenAI to extract structured filter information
+            prompt = f"""
+            Extract specific product search filters from this query: "{query}"
+            
+            Format your response as a JSON object with these fields:
+            - min_margin: Minimum profit margin as a number (e.g., 50 for 50%)
+            - max_price: Maximum product price as a number without $ (e.g., 30)
+            - min_rating: Minimum star rating as a number (e.g., 4)
+            - max_reviews: Maximum number of reviews as a number (e.g., 500)
+            - category: Product category name as a string (e.g., "bathroom")
+            
+            Use null for any filters not specified in the query.
+            
+            Examples:
+            "Find bathroom products with at least 50% margin" → {{"min_margin": 50, "max_price": null, "min_rating": null, "max_reviews": null, "category": "bathroom"}}
+            
+            "Show me kitchen gadgets under $30 with at least 4 stars" → {{"min_margin": null, "max_price": 30, "min_rating": 4, "max_reviews": null, "category": "kitchen"}}
+            
+            "Trending bathroom products with less than 500 reviews" → {{"min_margin": null, "max_price": null, "min_rating": null, "max_reviews": 500, "category": "bathroom"}}
+            """
+            
+            response = self.openai_client.chat.completions.create(
+                model="gpt-3.5-turbo",
+                messages=[
+                    {"role": "system", "content": "You extract structured product filter information from queries."},
+                    {"role": "user", "content": prompt}
+                ],
+                max_tokens=150,
+                response_format={"type": "json_object"}
+            )
+            
+            # Parse the response into a Python dictionary
+            extracted_filters = json.loads(response.choices[0].message.content)
+            
+            # Update our filters dictionary with the extracted values
+            for key, value in extracted_filters.items():
+                if value is not None:
+                    filters[key] = value
+            
+            # Fallback parsing for common filter phrases (in case OpenAI struggles)
+            if filters['min_margin'] is None and "margin" in query.lower():
+                # Look for patterns like "50% margin" or "margin of 50%"
+                import re
+                margin_match = re.search(r'(\d+)%\s+margin|margin\s+of\s+(\d+)%', query.lower())
+                if margin_match:
+                    margin_val = margin_match.group(1) or margin_match.group(2)
+                    filters['min_margin'] = int(margin_val)
+            
+            if filters['max_price'] is None and ("under" in query.lower() or "less than" in query.lower()):
+                # Look for patterns like "under $30" or "less than $50"
+                import re
+                price_match = re.search(r'under\s+\$?(\d+)|less than\s+\$?(\d+)', query.lower())
+                if price_match:
+                    price_val = price_match.group(1) or price_match.group(2)
+                    filters['max_price'] = int(price_val)
+            
+            print(f"Extracted filters: {filters}")
+            return filters
+            
+        except Exception as e:
+            print(f"Error parsing query filters: {e}")
+            return {
+                'min_margin': None,
+                'max_price': None,
+                'min_rating': None,
+                'max_reviews': None,
+                'category': None
+            }
+    
+    def determine_competition_level(self, product_data):
+        """
+        Determine the competition level based on review count and number of sellers
+        
+        Args:
+            product_data (dict): The product data containing review count and seller info
+            
+        Returns:
+            tuple: (competition_level, competition_details) - the competition level and details
+        """
+        try:
+            review_count = product_data.get('review_count', 0)
+            
+            # Get the number of sellers if available
+            seller_count = 0
+            buybox_winner = product_data.get('buybox_winner', {})
+            
+            # First check offers data - this contains all sellers
+            offers = product_data.get('offers', [])
+            if offers and isinstance(offers, list):
+                seller_count = len(offers)
+            # If no offers data, check if marketplace_sellers is available
+            elif product_data.get('marketplace_sellers') and isinstance(product_data.get('marketplace_sellers'), list):
+                seller_count = len(product_data.get('marketplace_sellers', []))
+            # If we at least have buybox winner, that's one seller
+            elif buybox_winner and isinstance(buybox_winner, dict):
+                seller_count = 1
+                # Check if fulfillment is by Amazon or third party
+                if buybox_winner.get('fulfilled_by') == 'Amazon':
+                    seller_count += 1  # Consider Amazon as an additional seller
+            
+            # Determine competition level based on number of sellers
+            if seller_count == 0:
+                # Fall back to review count if no seller data is available
+                if review_count == 0:
+                    competition_level = "Unknown"
+                    competition_details = "No review or seller data available"
+                elif review_count < 500:
+                    competition_level = "Low"
+                    competition_details = f"Only {review_count} reviews, likely new market"
+                elif review_count < 1000:
+                    competition_level = "Medium"
+                    competition_details = f"{review_count} reviews indicate established competition"
+                else:
+                    competition_level = "High"
+                    competition_details = f"High review count ({review_count}) indicates mature market"
+            else:
+                # Determine based on seller count
+                if seller_count <= 2:
+                    competition_level = "Low"
+                    competition_details = f"Only {seller_count} sellers in the market"
+                elif seller_count <= 5:
+                    competition_level = "Medium"
+                    competition_details = f"{seller_count} sellers competing in this market"
+                else:
+                    competition_level = "High"
+                    competition_details = f"Crowded market with {seller_count} active sellers"
+                
+                # Add review count context to the competition details
+                if review_count > 0:
+                    competition_details += f" with {review_count} product reviews"
+            
+            return competition_level, competition_details
+            
+        except Exception as e:
+            print(f"Error determining competition level: {e}")
+            return "Unknown", "Error analyzing competition data"
+    
+    def _apply_filters(self, products, filters):
+        """
+        Apply parsed filters to product list
+        
+        Args:
+            products (list): List of product dictionaries
+            filters (dict): Dictionary of filter criteria
+            
+        Returns:
+            list: Filtered list of products
+        """
+        if not products:
+            return []
+        
+        filtered = []
+        
+        # Extract filters
+        min_margin = filters.get('min_margin')
+        max_price = filters.get('max_price')
+        min_rating = filters.get('min_rating')
+        max_reviews = filters.get('max_reviews')
+        
+        print(f"Applying filters: {filters}")
+        
+        for product in products:
+            # Check if product meets all filter criteria
+            include_product = True
+            
+            # Apply margin filter if specified
+            if min_margin is not None and product.get('profit_margin', 0) < min_margin:
+                include_product = False
+            
+            # Apply price filter if specified
+            if max_price is not None and product.get('price', float('inf')) > max_price:
+                include_product = False
+            
+            # Apply rating filter if specified
+            if min_rating is not None and product.get('rating', 0) < min_rating:
+                include_product = False
+            
+            # Apply reviews filter if specified
+            if max_reviews is not None and product.get('review_count', float('inf')) > max_reviews:
+                include_product = False
+            
+            if include_product:
+                filtered.append(product)
+        
+        print(f"Filtered from {len(products)} to {len(filtered)} products")
+        
+        # If all products were filtered out, return a few of the original products
+        # This ensures the user gets some results even if no products match all criteria
+        if not filtered and products:
+            print("All products filtered out, returning top products from original list")
+            products.sort(key=lambda x: x.get('score', 0), reverse=True)
+            return products[:min(3, len(products))]
+        
+        return filtered 

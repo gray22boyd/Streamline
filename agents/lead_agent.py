@@ -16,7 +16,17 @@ class LeadAgent:
     def __init__(self):
         """Initialize the lead agent with the OpenAI client and specialized agents"""
         api_key = os.getenv("OPENAI_API_KEY")
-        self.client = OpenAI(api_key=api_key)
+        # Initialize OpenAI client with API key from environment
+        try:
+            # Try newer OpenAI client initialization (openai >= 1.0.0)
+            self.client = OpenAI(api_key=api_key)
+            self._using_new_api = True
+        except Exception:
+            # Fall back to older OpenAI API (openai < 1.0.0)
+            import openai
+            openai.api_key = api_key
+            self.client = openai
+            self._using_new_api = False
         
         # Initialize specialized agents
         self.product_agent = ProductAgent()
@@ -169,15 +179,28 @@ class LeadAgent:
         """
         
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": "You categorize user queries into predefined categories."},
-                    {"role": "user", "content": prompt}
-                ],
-                max_tokens=50
-            )
-            return response.choices[0].message.content.strip().lower()
+            if self._using_new_api:
+                # New OpenAI API (>= 1.0.0)
+                response = self.client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You categorize user queries into predefined categories."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=50
+                )
+                return response.choices[0].message.content.strip().lower()
+            else:
+                # Legacy OpenAI API (< 1.0.0)
+                response = self.client.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": "You categorize user queries into predefined categories."},
+                        {"role": "user", "content": prompt}
+                    ],
+                    max_tokens=50
+                )
+                return response.choices[0].message.content.strip().lower()
         except Exception as e:
             print(f"Error determining query intent: {e}")
             return "other"
@@ -228,9 +251,10 @@ class LeadAgent:
         category = product.get('category', 'Uncategorized')
         amazon_link = product.get('amazon_link', '')
         best_seller_rank = product.get('best_seller_rank', 'N/A')
-        sales_estimate = product.get('sales_estimate', 'N/A')
+        competition_level = product.get('competition_level', 'Unknown')
         profit_margin = product.get('profit_margin', 0)
         score = product.get('score', 0)
+        ad_pressure_level = product.get('ad_pressure_level', 'Unknown')
         
         response = f"# {title}\n\n"
         response += f"- **Brand:** {brand}\n"
@@ -245,7 +269,8 @@ class LeadAgent:
         response += "## Market Performance\n"
         response += f"- **Rating:** {rating}/5 ({review_count} reviews)\n"
         response += f"- **Best Seller Rank:** {best_seller_rank}\n"
-        response += f"- **Estimated Monthly Sales:** {sales_estimate} units\n\n"
+        response += f"- **Competition Level:** {competition_level}\n"
+        response += f"- **Ads Pressure:** {ad_pressure_level}\n\n"
         
         if amazon_link:
             response += f"[View on Amazon]({amazon_link})\n\n"
@@ -267,23 +292,42 @@ class LeadAgent:
         return self.product_agent.analyze_product(product)
         
     def _get_response_from_openai(self, query):
-        """Get a response from OpenAI"""
-        system_prompt = """
-        You are an e-commerce assistant that helps users with their shopping needs.
-        You can help with product recommendations, answer questions about products,
-        provide information about shipping, returns, and other e-commerce related inquiries.
-        Be helpful, concise, and friendly.
         """
+        Generate a response to a general query using OpenAI
         
+        Args:
+            query (str): The user's query text
+            
+        Returns:
+            str: The AI-generated response
+        """
         try:
-            response = self.client.chat.completions.create(
-                model="gpt-3.5-turbo",
-                messages=[
-                    {"role": "system", "content": system_prompt},
-                    {"role": "user", "content": query}
-                ],
-                max_tokens=500
-            )
-            return response.choices[0].message.content
+            system_prompt = """You are an e-commerce assistant helping with general questions. 
+            Provide helpful, accurate, and concise information. If asked about specific products, 
+            suggest that the user search for the product to get detailed information."""
+            
+            if self._using_new_api:
+                # New OpenAI API (>= 1.0.0)
+                response = self.client.chat.completions.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": query}
+                    ],
+                    max_tokens=500
+                )
+                return response.choices[0].message.content
+            else:
+                # Legacy OpenAI API (< 1.0.0)
+                response = self.client.ChatCompletion.create(
+                    model="gpt-3.5-turbo",
+                    messages=[
+                        {"role": "system", "content": system_prompt},
+                        {"role": "user", "content": query}
+                    ],
+                    max_tokens=500
+                )
+                return response.choices[0].message.content
         except Exception as e:
-            return f"I'm sorry, I encountered an error: {str(e)}. Please try again later." 
+            print(f"Error generating response: {e}")
+            return "I'm sorry, I encountered an error while generating a response. Please try again." 

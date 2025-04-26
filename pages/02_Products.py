@@ -70,7 +70,7 @@ with col2:
         'rating': 'Customer Rating',
         'review_count': 'Number of Reviews',
         'best_seller_rank': 'Best Seller Rank',
-        'sales_estimate': 'Estimated Sales',
+        'ad_pressure_level': 'Ad Pressure',
         'timestamp': 'Date Added'
     }
     selected_sort = st.selectbox("Sort by", list(sort_options.values()))
@@ -117,14 +117,30 @@ if not filtered_products.empty:
     # Display products in a nice table
     st.subheader("Products")
     
-    # Display table with selected columns
-    display_columns = [
-        'title', 'brand', 'category', 'price', 'wholesale_price', 
-        'profit_margin', 'rating', 'review_count', 'sales_estimate', 'score'
+    # Set up column display options
+    columns = [
+        'title', 'brand', 'price', 'wholesale_price', 'profit_margin',
+        'rating', 'review_count', 'best_seller_rank', 'ad_pressure_level',
+        'category', 'score'
     ]
     
+    # User-friendly column names for display
+    column_names = {
+        'title': 'Product Name',
+        'brand': 'Brand',
+        'price': 'Retail Price',
+        'wholesale_price': 'Wholesale Price',
+        'profit_margin': 'Profit Margin %',
+        'rating': 'Rating',
+        'review_count': 'Reviews',
+        'best_seller_rank': 'Best Seller Rank',
+        'ad_pressure_level': 'Ad Pressure',
+        'category': 'Category',
+        'score': 'Score'
+    }
+    
     # Keep only columns that exist in the DataFrame
-    display_columns = [col for col in display_columns if col in filtered_products.columns]
+    display_columns = [col for col in columns if col in filtered_products.columns]
     
     # Format columns for display
     table_df = filtered_products[display_columns].copy()
@@ -147,19 +163,8 @@ if not filtered_products.empty:
         table_df['score'] = table_df['score'].apply(lambda x: f"{x}/100" if pd.notnull(x) else "-")
     
     # Rename columns for display
-    rename_map = {
-        'title': 'Product Name',
-        'brand': 'Brand',
-        'category': 'Category',
-        'price': 'Retail Price',
-        'wholesale_price': 'Wholesale Price',
-        'profit_margin': 'Profit Margin',
-        'rating': 'Rating',
-        'review_count': 'Reviews',
-        'sales_estimate': 'Est. Monthly Sales',
-        'score': 'Overall Score'
-    }
-    table_df.rename(columns={k: v for k, v in rename_map.items() if k in table_df.columns}, inplace=True)
+    rename_map = {k: column_names[k] for k in display_columns if k in column_names}
+    table_df.rename(columns=rename_map, inplace=True)
     
     # Display the table
     st.dataframe(table_df, use_container_width=True)
@@ -221,7 +226,19 @@ if not filtered_products.empty:
                 st.metric("Reviews", f"{product.get('review_count', 0)}")
             
             with col3:
-                st.metric("Est. Monthly Sales", f"{product.get('sales_estimate', 0)}")
+                st.metric("Competition", f"{product.get('competition_level', 'Unknown')}")
+            
+            # Add ad pressure information
+            col1, col2 = st.columns(2)
+            
+            with col1:
+                ad_pressure = product.get('ad_pressure_level', 'Unknown')
+                ad_color = "red" if ad_pressure == "High" else "orange" if ad_pressure == "Medium" else "green"
+                st.markdown(f"**Ad Pressure:** <span style='color:{ad_color}'>{ad_pressure}</span>", unsafe_allow_html=True)
+            
+            with col2:
+                if product.get('is_sponsored', False):
+                    st.markdown("⚠️ **Product is sponsored**")
             
             if 'best_seller_rank' in product:
                 st.markdown(f"**Best Seller Rank:** {product['best_seller_rank']}")
