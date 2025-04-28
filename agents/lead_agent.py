@@ -1,7 +1,7 @@
 import os
 from openai import OpenAI
 from dotenv import load_dotenv
-from agents.product_agent import ProductAgent
+from .product_agent import ProductAgent
 from database.conversation_store import ConversationStore
 import streamlit as st
 

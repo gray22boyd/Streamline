@@ -1,30 +1,42 @@
 import streamlit as st
 import os
 import json
+import sys
 from datetime import datetime
 import traceback
+
+# Add the current directory to the path to ensure modules can be found
+sys.path.append(os.path.dirname(os.path.abspath(__file__)))
 
 # Try importing the required modules with error handling
 try:
     from agents.lead_agent import LeadAgent
     from database.conversation_store import ConversationStore
 except ImportError as e:
-    st.error(f"""
-    **Error: Failed to import required modules.**
-    
-    This could be due to incorrect Python package structure or missing dependencies.
-    
-    Technical details:
-    {str(e)}
-    
-    If you're deploying to Streamlit Cloud, check that:
-    1. All required packages are in requirements.txt
-    2. Your project structure is correct
-    3. Environment variables are set in Streamlit Cloud
-    """)
-    # Show traceback but clean it to avoid exposing sensitive info
-    st.code(traceback.format_exc(), language="python")
-    st.stop()
+    # Try alternative import approach
+    try:
+        st.write("Attempting alternative import approach...")
+        import agents.lead_agent
+        import database.conversation_store
+        LeadAgent = agents.lead_agent.LeadAgent
+        ConversationStore = database.conversation_store.ConversationStore
+    except ImportError as e2:
+        st.error(f"""
+        **Error: Failed to import required modules.**
+        
+        This could be due to incorrect Python package structure or missing dependencies.
+        
+        Technical details:
+        {str(e2)}
+        
+        If you're deploying to Streamlit Cloud, check that:
+        1. All required packages are in requirements.txt
+        2. Your project structure is correct
+        3. Environment variables are set in Streamlit Cloud
+        """)
+        # Show traceback but clean it to avoid exposing sensitive info
+        st.code(traceback.format_exc(), language="python")
+        st.stop()
 
 # Page configuration
 st.set_page_config(

@@ -5,6 +5,10 @@ setup(
     version="0.1.0",
     packages=find_packages(),
     include_package_data=True,
+    package_data={
+        "": ["*.toml", "*.txt", "*.md"],
+    },
+    py_modules=["app", "pages.01_History", "pages.02_Products"],
     install_requires=[
         "streamlit==1.32.0",
         "openai==1.12.0",
