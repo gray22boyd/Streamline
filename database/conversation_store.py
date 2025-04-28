@@ -1,6 +1,7 @@
 import sqlite3
 import os
 import json
+import streamlit as st
 from datetime import datetime
 
 class ConversationStore:
@@ -15,7 +16,17 @@ class ConversationStore:
         Args:
             db_path (str): Path to the SQLite database file
         """
-        self.db_path = db_path
+        # Ensure db_path is accessible in the current environment
+        # For Streamlit Cloud, we need to make sure the path is writable
+        if os.environ.get('STREAMLIT_CLOUD'):
+            # On Streamlit Cloud, use a path in the mounted filesystem
+            self.db_path = os.path.join('/mount/src/streamline', db_path)
+        else:
+            self.db_path = db_path
+            
+        # Create directory if it doesn't exist
+        os.makedirs(os.path.dirname(self.db_path) if os.path.dirname(self.db_path) else '.', exist_ok=True)
+        
         self._initialize_db()
         self._migrate_schema_if_needed()  # Check for needed schema migrations
         

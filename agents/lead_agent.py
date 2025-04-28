@@ -3,6 +3,7 @@ from openai import OpenAI
 from dotenv import load_dotenv
 from agents.product_agent import ProductAgent
 from database.conversation_store import ConversationStore
+import streamlit as st
 
 # Load environment variables
 load_dotenv()
@@ -15,7 +16,9 @@ class LeadAgent:
     
     def __init__(self):
         """Initialize the lead agent with the OpenAI client and specialized agents"""
-        api_key = os.getenv("OPENAI_API_KEY")
+        # Try to get api key from streamlit secrets first, then environment variables
+        api_key = st.secrets["openai"]["api_key"] if "openai" in st.secrets else os.getenv("OPENAI_API_KEY")
+        
         # Initialize OpenAI client with API key from environment
         try:
             # Try newer OpenAI client initialization (openai >= 1.0.0)
@@ -179,6 +182,18 @@ class LeadAgent:
         """
         
         try:
+            # Check if API key is available
+            api_key = st.secrets["openai"]["api_key"] if "openai" in st.secrets else os.getenv("OPENAI_API_KEY")
+            if not api_key:
+                print("Warning: No OpenAI API key found. Using fallback intent detection.")
+                # Simple fallback: check for product-related keywords
+                if any(word in query.lower() for word in ["recommend", "suggest", "trending", "popular"]):
+                    return "product_recommendation"
+                elif any(word in query.lower() for word in ["details", "info", "about", "specific"]):
+                    return "product_info"
+                else:
+                    return "other"
+                    
             if self._using_new_api:
                 # New OpenAI API (>= 1.0.0)
                 response = self.client.chat.completions.create(
@@ -203,7 +218,15 @@ class LeadAgent:
                 return response.choices[0].message.content.strip().lower()
         except Exception as e:
             print(f"Error determining query intent: {e}")
-            return "other"
+            # Provide a fallback in case of errors
+            print("Using fallback intent detection.")
+            # Simple fallback: check for product-related keywords
+            if any(word in query.lower() for word in ["recommend", "suggest", "trending", "popular"]):
+                return "product_recommendation"
+            elif any(word in query.lower() for word in ["details", "info", "about", "specific"]):
+                return "product_info"
+            else:
+                return "other"
         
     def _format_product_recommendations(self, query, products):
         """Format product recommendations into a readable response with enhanced data"""

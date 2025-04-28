@@ -1,0 +1,17 @@
+from setuptools import setup, find_packages
+
+setup(
+    name="streamline",
+    version="0.1.0",
+    packages=find_packages(),
+    include_package_data=True,
+    install_requires=[
+        "streamlit==1.32.0",
+        "openai==1.12.0",
+        "python-dotenv==1.0.0",
+        "boto3==1.34.52",
+        "requests==2.31.0",
+        "pandas==2.1.4",
+        "urllib3==2.0.3",
+    ],
+) 

@@ -5,6 +5,7 @@ import hmac
 import hashlib
 import time
 import boto3
+import streamlit as st
 from datetime import datetime, timedelta
 from urllib.parse import quote, urlencode
 from openai import OpenAI
@@ -22,18 +23,18 @@ class ProductAgent:
     def __init__(self):
         """Initialize the product agent with API clients"""
         # OpenAI client for intent analysis
-        openai_api_key = os.getenv("OPENAI_API_KEY")
+        openai_api_key = st.secrets["openai"]["api_key"] if "openai" in st.secrets else os.getenv("OPENAI_API_KEY")
         self.openai_client = OpenAI(api_key=openai_api_key)
         
         # Amazon SP API credentials
-        self.aws_access_key = os.getenv("AWS_ACCESS_KEY")
-        self.aws_secret_key = os.getenv("AWS_SECRET_KEY")
-        self.amazon_client_id = os.getenv("AMAZON_CLIENT_ID")
-        self.amazon_client_secret = os.getenv("AMAZON_CLIENT_SECRET")
-        self.amazon_access_token = "Atza|IwEBIAMvZaIeOvxq8sRbeVbr45BLkhv6VxxAqK-pc20dhgJW4RGOTwC4TQyEAuAfX3rWBRqW_9OT_kNgxYexRfFt1irouAzVCJCZTuN-GegjD0afAOoX415hzJ2on6dtb-zrVr9ZIGVg0_QveuLF7fmEQL_AuHp8GzCr7gz5w4hnysBqkfvMgRPaWEliwjRKHj3F1cSKxZw3Ubc9md9rhyMD1OHUYFqY4keZ08Nuk1cAOM4dcwhtvFyT5_SolXdVCETAhaL0DpILMQOWDlTZfUkyuDIHQksWfwZcCPxSbdtGGOqs3mYxmaAsWtPY9gDES67TK6g2I8KYgPWHTNUkuWfuaMkYGjr4l8FxnlD22phLLUtJSw"
+        self.aws_access_key = st.secrets["aws"]["access_key"] if "aws" in st.secrets else os.getenv("AWS_ACCESS_KEY")
+        self.aws_secret_key = st.secrets["aws"]["secret_key"] if "aws" in st.secrets else os.getenv("AWS_SECRET_KEY")
+        self.amazon_client_id = st.secrets["amazon"]["client_id"] if "amazon" in st.secrets else os.getenv("AMAZON_CLIENT_ID")
+        self.amazon_client_secret = st.secrets["amazon"]["client_secret"] if "amazon" in st.secrets else os.getenv("AMAZON_CLIENT_SECRET")
+        self.amazon_access_token = st.secrets["amazon"]["access_token"] if "amazon" in st.secrets else os.getenv("AMAZON_ACCESS_TOKEN")
         
         # Rainforest API credentials
-        self.rainforest_api_key = os.getenv("RAINFOREST_API_KEY")
+        self.rainforest_api_key = st.secrets["rainforest"]["api_key"] if "rainforest" in st.secrets else os.getenv("RAINFOREST_API_KEY")
         
         # Initialize the session for Amazon SP API
         self.session = boto3.Session(

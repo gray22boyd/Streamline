@@ -2,8 +2,29 @@ import streamlit as st
 import os
 import json
 from datetime import datetime
-from agents.lead_agent import LeadAgent
-from database.conversation_store import ConversationStore
+import traceback
+
+# Try importing the required modules with error handling
+try:
+    from agents.lead_agent import LeadAgent
+    from database.conversation_store import ConversationStore
+except ImportError as e:
+    st.error(f"""
+    **Error: Failed to import required modules.**
+    
+    This could be due to incorrect Python package structure or missing dependencies.
+    
+    Technical details:
+    {str(e)}
+    
+    If you're deploying to Streamlit Cloud, check that:
+    1. All required packages are in requirements.txt
+    2. Your project structure is correct
+    3. Environment variables are set in Streamlit Cloud
+    """)
+    # Show traceback but clean it to avoid exposing sensitive info
+    st.code(traceback.format_exc(), language="python")
+    st.stop()
 
 # Page configuration
 st.set_page_config(
@@ -13,14 +34,30 @@ st.set_page_config(
 )
 
 # Initialize database
-conversation_store = ConversationStore()
+try:
+    conversation_store = ConversationStore()
+except Exception as e:
+    st.error(f"""
+    **Error initializing database.**
+    
+    {str(e)}
+    """)
+    st.code(traceback.format_exc(), language="python")
+    st.stop()
 
 # Initialize agents
 @st.cache_resource
 def initialize_lead_agent():
-    return LeadAgent()
+    try:
+        return LeadAgent()
+    except Exception as e:
+        st.error(f"Failed to initialize LeadAgent: {str(e)}")
+        return None
 
 lead_agent = initialize_lead_agent()
+if lead_agent is None:
+    st.error("Cannot continue without the Lead Agent. Please check logs for errors.")
+    st.stop()
 
 # App title
 st.title("E-commerce Agent Team")
