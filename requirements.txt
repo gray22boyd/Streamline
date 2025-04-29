@@ -1,5 +1,12 @@
 # THIS IS THE LIVE REQUIREMENTS FILE 2025-04-29 01:00
-openai==1.10.0
+streamlit==1.32.0
+openai==1.3.0
+python-dotenv==1.0.0
+boto3==1.34.52
+requests==2.31.0
+pandas==2.1.4
+urllib3==2.0.3
+httpx==0.24.1
 ...
 
 
