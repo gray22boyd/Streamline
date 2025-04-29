@@ -1,5 +1,5 @@
 import os
-from openai import OpenAI
+import openai
 from dotenv import load_dotenv
 from .product_agent import ProductAgent
 from database.conversation_store import ConversationStore
@@ -20,8 +20,8 @@ class LeadAgent:
         api_key = st.secrets["openai"]["api_key"] if "openai" in st.secrets else os.getenv("OPENAI_API_KEY")
         
         # Initialize OpenAI client with API key
-        self.client = OpenAI(api_key=api_key)
-        
+        self.client = openai.OpenAI(api_key=api_key)
+
         # Initialize specialized agents
         self.product_agent = ProductAgent()
         
