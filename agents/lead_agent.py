@@ -36,7 +36,8 @@ class LeadAgent:
             )
         
         # Initialize OpenAI client with API key
-        self.client = openai.OpenAI(api_key=api_key)
+        openai.api_key = api_key
+        self.client = openai
 
         # Initialize specialized agents
         self.product_agent = ProductAgent()
