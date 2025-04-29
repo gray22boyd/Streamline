@@ -17,7 +17,23 @@ class LeadAgent:
     def __init__(self):
         """Initialize the lead agent with the OpenAI client and specialized agents"""
         # Try to get api key from streamlit secrets first, then environment variables
-        api_key = st.secrets["openai"]["api_key"] if "openai" in st.secrets else os.getenv("OPENAI_API_KEY")
+        api_key = None
+        
+        # First try Streamlit secrets
+        if "openai" in st.secrets and "api_key" in st.secrets["openai"]:
+            api_key = st.secrets["openai"]["api_key"]
+        
+        # If not in secrets, try environment variable
+        if not api_key:
+            api_key = os.getenv("OPENAI_API_KEY")
+            
+        # If still no API key, raise a more descriptive error
+        if not api_key:
+            raise ValueError(
+                "OpenAI API key not found. Please set it in either:\n"
+                "1. Streamlit secrets (recommended for production): Add 'openai.api_key' to your secrets\n"
+                "2. Environment variable: Set OPENAI_API_KEY in your environment"
+            )
         
         # Initialize OpenAI client with API key
         self.client = openai.OpenAI(api_key=api_key)
