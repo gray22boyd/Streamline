@@ -1,5 +1,5 @@
 import os
-import openai
+from openai import OpenAI
 from dotenv import load_dotenv
 from .product_agent import ProductAgent
 from database.conversation_store import ConversationStore
@@ -16,28 +16,15 @@ class LeadAgent:
     
     def __init__(self):
         """Initialize the lead agent with the OpenAI client and specialized agents"""
-        # Try to get api key from streamlit secrets first, then environment variables
-        api_key = None
-        
-        # First try Streamlit secrets
-        if "openai" in st.secrets and "api_key" in st.secrets["openai"]:
-            api_key = st.secrets["openai"]["api_key"]
-        
-        # If not in secrets, try environment variable
-        if not api_key:
-            api_key = os.getenv("OPENAI_API_KEY")
-            
-        # If still no API key, raise a more descriptive error
-        if not api_key:
+        # Get API key from Streamlit secrets
+        if "openai" not in st.secrets or "api_key" not in st.secrets["openai"]:
             raise ValueError(
-                "OpenAI API key not found. Please set it in either:\n"
-                "1. Streamlit secrets (recommended for production): Add 'openai.api_key' to your secrets\n"
-                "2. Environment variable: Set OPENAI_API_KEY in your environment"
+                "OpenAI API key not found in Streamlit secrets. "
+                "Please add it to your Streamlit Cloud deployment settings."
             )
-        
-        # Initialize OpenAI client with API key
-        openai.api_key = api_key
-        self.client = openai
+            
+        # Initialize OpenAI client with API key from secrets
+        self.client = OpenAI(api_key=st.secrets["openai"]["api_key"])
 
         # Initialize specialized agents
         self.product_agent = ProductAgent()
