@@ -19,17 +19,8 @@ class LeadAgent:
         # Try to get api key from streamlit secrets first, then environment variables
         api_key = st.secrets["openai"]["api_key"] if "openai" in st.secrets else os.getenv("OPENAI_API_KEY")
         
-        # Initialize OpenAI client with API key from environment
-        try:
-            # Try newer OpenAI client initialization (openai >= 1.0.0)
-            self.client = OpenAI(api_key=api_key)
-            self._using_new_api = True
-        except Exception:
-            # Fall back to older OpenAI API (openai < 1.0.0)
-            import openai
-            openai.api_key = api_key
-            self.client = openai
-            self._using_new_api = False
+        # Initialize OpenAI client with API key
+        self.client = OpenAI(api_key=api_key)
         
         # Initialize specialized agents
         self.product_agent = ProductAgent()
